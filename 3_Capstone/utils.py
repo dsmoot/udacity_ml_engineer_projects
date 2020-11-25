@@ -24,19 +24,22 @@ def scale_image(img):
     '''
     scale the arrays within a rasterio datasetreader object to the range [0:1]
     '''
-    test_img_scaled = np.empty(img.read().shape)
+    img_scaled = np.empty(img.read().shape)
     for i,band in enumerate(img.read()):
         img_max = np.max(band)
         img_min = np.min(band)
 
         scaled_band = (band - img_min) * 1/(img_max-img_min)
 
-        test_img_scaled[i] = scaled_band
+        img_scaled[i] = scaled_band
         
-    return test_img_scaled
+    return img_scaled
 
 def scale_geometry(x, img, img_id, grid_df):
-    _,h,w = img.shape
+    if len(img.shape)>2:
+        _,h,w = img.shape
+    else:
+        h,w = img.shape
     xmax, ymax = grid_df.loc[img_id]
     
     W = w**2 / (w+1)
@@ -60,6 +63,9 @@ def scale_geometry(x, img, img_id, grid_df):
         return shapely.geometry.MultiPolygon(polys)  
     
 def get_labeled_polygons(image_id, grid_df):
+    '''
+    return dictionary of labeled polygons from geojson files in train_geojson_v4 directory
+    '''
     fp = os.path.join('train_geojson_v3',image_id)
     
     if os.path.exists(fp):
@@ -77,14 +83,15 @@ def get_labeled_polygons(image_id, grid_df):
                 gdf = gpd.read_file(os.path.join(fp,f))
                 gdf['geometry'] = gdf['geometry'].apply(scale_geometry,args=(image_scaled,image_id,grid_df))
 
-                poly_dict[label] = gdf['geometry']
+                poly_dict[label] = gdf['geometry'].values
+        image.close()
                 
         return poly_dict
     else:
         print(f'{image_id}: is not a training image')
         
         
-def plot_polys(img, spatial_dict, axes):
+def plot_polys(spatial_dict, axes, geojson=True):
     '''
     plot image with layer of spatial objects from dictionary
     args:
@@ -95,8 +102,12 @@ def plot_polys(img, spatial_dict, axes):
     if not bool(spatial_dict):
         print("no polygons to plot")
     else:
+        
         for class_label in spatial_dict.keys():
-            color_mapped = mapping_dict[class_label]
+            if geojson:
+                color_mapped = mapping_dict[class_label]
+            else:
+                color_mapped = class_label
             for geom in spatial_dict[class_label]:
                 axes.add_patch(PolygonPatch(geom,alpha=0.65,ec=colors[color_mapped],fc='ivory'))
             
