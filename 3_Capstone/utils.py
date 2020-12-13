@@ -20,10 +20,30 @@ import numpy as np
 import glob
 
 
-def scale_image(img):
+def get_grid_sizes():
+    grid_sizes = pd.read_csv('grid_sizes.csv',names=['ImageId','Xmax','Ymax'],skiprows=1)
+    grid_sizes.set_index('ImageId',inplace=True)
+    return grid_sizes
+
+def resize_raster(src_img, scaled_img):
     '''
-    scale the arrays within a rasterio datasetreader object to the range [0:1]
+    reads rasterio dataset reader object set to the desired H / W scale
+    
+    -----------
+    returns: ndarray of all bands in src img scaled to match the src img
     '''
+    
+    scaled_arrays = src_img.read(out_shape=(int(scaled_img.height), int(scaled_img.width)))
+    
+    return scaled_arrays
+    
+    
+    
+def scale_pixels(img):
+    '''
+    scale the arrays within a rasterio datasetreader object to the range [0:1] for viewing
+    '''
+    
     img_scaled = np.empty(img.read().shape)
     for i,band in enumerate(img.read()):
         img_max = np.max(band)
@@ -35,33 +55,95 @@ def scale_image(img):
         
     return img_scaled
 
-def scale_geometry(x, img, img_id, grid_df):
+def get_image_scale(img):
     if len(img.shape)>2:
         _,h,w = img.shape
     else:
         h,w = img.shape
-    xmax, ymax = grid_df.loc[img_id]
     
     W = w**2 / (w+1)
     H = h**2 / (h+1)
+    return W, H
 
-    if type(x) != shapely.geometry.multipolygon.MultiPolygon:
-        x,y = np.array(x.exterior.coords.xy[0]), np.array(x.exterior.coords.xy[1])
-        X = (x / xmax) * W
-        Y = (y / ymax) * H
-        scaled_coords = np.concatenate([X[:,None],Y[:,None]],axis=1)
-        return shapely.geometry.Polygon(scaled_coords)
+def get_image_max(img_id, grid_df):
+    xmax, ymax = grid_df.loc[img_id]
+    return xmax, ymax
+
+def convert_xy_to_raster(x, y, xmax, ymax, W, H):
+    '''
+    converts xy coordinates to scaled raster coordinates
+    params:
+        x: x coordinate sequence to scale
+        y: y coordinate sequence to scale
+        xmax: image x maximum
+        ymax: image y maximum
+        W: image width, converted to raster
+        H: image height, converted to raster
+    returns:
+        numpy array of scaled x and y coordinate sequences'''
+    
+    X = np.round((x / xmax) * W).astype(np.int32)
+    Y = np.round((y / ymax) * H).astype(np.int32)
+    
+    return np.concatenate([X[:,None],Y[:,None]],axis=1)
+
+# def scale_geometry(x, img, img_id, grid_df):
+#     if len(img.shape)>2:
+#         _,h,w = img.shape
+#     else:
+#         h,w = img.shape
+#     xmax, ymax = grid_df.loc[img_id]
+    
+#     W = w**2 / (w+1)
+#     H = h**2 / (h+1)
+
+#     if type(x) != shapely.geometry.multipolygon.MultiPolygon:
+#         x,y = np.array(x.exterior.coords.xy[0]), np.array(x.exterior.coords.xy[1])
+#         X = (x / xmax) * W
+#         Y = (y / ymax) * H
+#         scaled_coords = np.concatenate([X[:,None],Y[:,None]],axis=1)
+#         return shapely.geometry.Polygon(scaled_coords)
+#     else:
+#         polys = []
+#         for line in list(x.boundary.geoms):
+                   
+#             x,y = np.array(line)[:,0], np.array(line)[:,1]
+#             X = (x / xmax) * W
+#             Y = (y / ymax) * H
+#             scaled_coords = np.concatenate([X[:,None],Y[:,None]],axis=1)
+#             polys.append(shapely.geometry.Polygon(scaled_coords))
+#         return shapely.geometry.MultiPolygon(polys)  
+
+    
+def scale_geometry(geo, img, image_id, grid_df):
+     
+    W,H = get_image_scale(img)
+        
+    xmax, ymax = get_image_max(image_id, grid_df)
+    
+    
+
+    if type(geo) != shapely.geometry.multipolygon.MultiPolygon:
+        x_ext,y_ext = np.array(geo.exterior.coords.xy[0]), np.array(geo.exterior.coords.xy[1])
+        exterior = convert_xy_to_raster(x_ext,y_ext,xmax,ymax,W,H)
+        
+        return shapely.geometry.Polygon(exterior)
     else:
         polys = []
-        for line in list(x.boundary.geoms):
-                   
-            x,y = np.array(line)[:,0], np.array(line)[:,1]
-            X = (x / xmax) * W
-            Y = (y / ymax) * H
-            scaled_coords = np.concatenate([X[:,None],Y[:,None]],axis=1)
-            polys.append(shapely.geometry.Polygon(scaled_coords))
+        for poly in geo:
+            x_ext,y_ext = np.array(poly.exterior.coords.xy[0]), np.array(poly.exterior.coords.xy[1])
+            exterior = convert_xy_to_raster(x_ext,y_ext,xmax,ymax,W,H)
+            interiors = []
+            for interior in poly.interiors:
+                x_int, y_int = np.array(interior.coords.xy[0]),np.array(interior.coords.xy[1])
+                interiors.append(convert_xy_to_raster(x_int, y_int,xmax,ymax,W,H))
+
+            scaled_poly = shapely.geometry.Polygon(exterior,interiors)
+            
+            polys.append(scaled_poly)
         return shapely.geometry.MultiPolygon(polys)  
-    
+
+        
 def get_labeled_polygons(image_id, grid_df):
     '''
     return dictionary of labeled polygons from geojson files in train_geojson_v4 directory
@@ -70,7 +152,7 @@ def get_labeled_polygons(image_id, grid_df):
     
     if os.path.exists(fp):
         image = rasterio.open(os.path.join('three_band',image_id+'.tif'))
-        image_scaled = scale_image(image)
+#         image_scaled = scale_image(image)
         poly_dict = {}
         mapping_dict = {}
 
@@ -81,7 +163,7 @@ def get_labeled_polygons(image_id, grid_df):
             else:
                 label = f[:-8]
                 gdf = gpd.read_file(os.path.join(fp,f))
-                gdf['geometry'] = gdf['geometry'].apply(scale_geometry,args=(image_scaled,image_id,grid_df))
+                gdf['geometry'] = gdf['geometry'].apply(scale_geometry,args=(image,image_id,grid_df))#image_scaled,image_id,grid_df))
 
                 poly_dict[label] = gdf['geometry'].values
         image.close()
@@ -123,16 +205,16 @@ class_labels = {1:'Buildings',
                 9:'Vehicle Large',
                 10:'Vehicle Small'}
 
-colors = {1:'slategray',
-          2:'lightsteelblue',
-          3:'darkorange', 
-          4:'red', 
-          5:'green', 
-          6:'wheat',
-          7:'navy',
-          8:'aqua',
-          9:'deeppink',
-          10:'fuchsia' }
+colors = {1:'#aaaaaa',
+          2:'#666666',
+          3:'#b35806', 
+          4:'#dfc27d', 
+          5:'#1b7837', 
+          6:'#a6dba0',
+          7:'#74add1',
+          8:'#4575b4',
+          9:'#f46d43',
+          10:'#d73027' }
 
 mapping_dict = {'001_MM_L2_LARGE_BUILDING':1,
  '001_MM_L3_EXTRACTION_MINE':2,
