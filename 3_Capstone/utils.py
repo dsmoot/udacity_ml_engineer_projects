@@ -191,7 +191,7 @@ def plot_polys(spatial_dict, axes, geojson=True):
             else:
                 color_mapped = class_label
             for geom in spatial_dict[class_label]:
-                axes.add_patch(PolygonPatch(geom,alpha=0.65,ec=colors[color_mapped],fc='ivory'))
+                axes.add_patch(PolygonPatch(geom,alpha=0.65,ec=colors[color_mapped],fc=colors[color_mapped]))
             
             
 class_labels = {1:'Buildings',
